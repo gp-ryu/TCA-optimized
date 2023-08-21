@@ -32,70 +32,6 @@ start_logger <- function(log_file, debug, verbose = TRUE){
   if (!verbose) (flog.threshold("ERROR"))
 }
 
-minus_log_likelihood_tau <- function(U,W_squared,sigmas,const,tau){
-  m <- ncol(U)
-  res <- matrix(0,m,2)
-  tmp <- lapply(1:m, function(j)
-  {V <- tcrossprod(W_squared,t(sigmas[j,]**2))+tau**2;
-  V_squared <- V**2;
-  return (c(-0.5*(const-sum(log(V))-sum(U[,j]/V)), -(tau*(sum(U[,j]/V_squared)-sum(1./V))))) } )
-  for (j in 1:m){
-    res[j,] = tmp[[j]]
-  }
-  res <- colSums(res)
-  return(list( "objective" = res[1], "gradient" = res[2] ))
-}
-
-# Returns the (minus) log likelihood of the model for a particular feature j in a list together with the gradient with respect to sigmas of feature j
-# Input:
-#  sigmas_hat (of a particular feature j)
-#  U_j is the j-th columns of U, where U = (tcrossprod(W,mus_hat) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2
-#  const <- -n*log(2*pi)
-#  W_squared <- W**2
-#  tau
-minus_log_likelihood_sigmas <- function(sigmas,U_j,W_squared,const,tau){
-  k <- length(sigmas)
-  n <- nrow(W_squared)
-  V <- tcrossprod(W_squared,t(sigmas**2))+tau**2
-  V_squared <- V**2
-  return(list("objective"= -0.5*(const-sum(log(V))-sum(U_j/V)),
-              "gradient" = -(colSums(W_squared*repmat(sigmas,n,1)*t(repmat(U_j,k,1))/repmat(V_squared,1,k)) - colSums(W_squared*repmat(sigmas,n,1)/repmat(V,1,k)))))
-}
-
-
-# Returns the (minus) log likelihood of the model for a particular observation i in a list together with the gradient with respect to w_i
-# Input:
-# C_tilde - if p1=0 then C_tilde = matrix(0,m,k), otherwise it is calculated as follows:
-# for (h in 1:k){
-#    C_tilde[,h] = tcrossprod(gammas[,(1+(h-1)*p1):(h*p1)],c1_i)
-# }
-# sigmas_squared = sigmas**2
-# crossprod_deltas_c2_i = tcrossprod(deltas,t(C2[i,]))
-minus_log_likelihood_w <- function(w_i, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i){
-  k <- length(w_i)
-  m <- dim(mus)[1]
-  c1_i_ <- calc_C1_W_interactions(w_i,c1_i)
-  V <- tcrossprod(sigmas_squared,w_i**2)+tau**2
-  V_rep <- repmat(V,1,k)
-  U_i <- tcrossprod(mus,w_i) + crossprod_deltas_c2_i + tcrossprod(gammas,c1_i_) - t(x_i)
-  U_i_squared <- U_i**2
-  w_i_rep <- repmat(w_i,m,1)
-  fval <- -0.5*(const-sum(log(V))-sum(U_i_squared/V))
-  gval <- colSums(w_i_rep*sigmas_squared/V_rep) + colSums(( (mus+C_tilde)*repmat(U_i,1,k)*V_rep - w_i_rep*sigmas_squared*repmat(U_i_squared,1,k) ) / repmat(V**2,1,k))
-  return(list("objective"= fval, "gradient" = gval))
-}
-
-#' @importFrom matrixcalc hadamard.prod
-calc_C1_W_interactions <- function(W,C1){
-  n <- nrow(W)
-  k <- ncol(W)
-  p1 <- ncol(C1)
-  if (p1){
-    return( hadamard.prod(Reshape(Reshape(apply(W, 2, function(v) repmat(v,1,p1)), n*p1*k,1), n,p1*k), repmat(C1, 1, k)) )
-  }else{
-    return(matrix(0,n,0))
-  }
-}
 
 init_means_vars <- function(C1_names, C2_names, feature_ids, source_ids, tau){
   config <- config::get(file = system.file("extdata", "config.yml", package = "TCA"), use_parent = FALSE)
@@ -200,6 +136,81 @@ tca.validate_input <- function(X, W, C1, C1.map, C2, refit_W, refit_W.features, 
 #' @importFrom pracma lsqlincon
 #' @importFrom nloptr nloptr
 #' @importFrom matrixStats colVars
+
+minus_log_likelihood_tau <- function(U,W_squared,sigmas,const,tau){
+  m <- ncol(U)
+  res <- matrix(0,m,2)
+  ##tmps
+  V <- eigenProduct(W_squared, (sigmas^2 %>% t)) + tau^2
+  
+  tmp <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j){
+    V_tmp <- V[,j]
+    #V_squared <- V**2;
+    return (c(-0.5*(const-sum(log(V_tmp))-sum(U[,j]/V_tmp)), -(tau*(sum(U[,j]/V_tmp^2)-sum(1./V_tmp))))) 
+    })
+  
+  res <- tmp %>% unlist %>% matrix(., nrow = 2) %>% t %>% colSums()
+  # for (j in 1:m){
+  #   res[j,] = tmp[[j]]
+  # }
+  # res <- colSums(res)
+  return(list( "objective" = res[1], "gradient" = res[2] ))
+}
+
+# Returns the (minus) log likelihood of the model for a particular feature j in a list together with the gradient with respect to sigmas of feature j
+# Input:
+#  sigmas_hat (of a particular feature j)
+#  U_j is the j-th columns of U, where U = (tcrossprod(W,mus_hat) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2
+#  const <- -n*log(2*pi)
+#  W_squared <- W**2
+#  tau
+minus_log_likelihood_sigmas <- function(sigmas,U_j,W_squared,const,tau){
+  k <- length(sigmas)
+  n <- nrow(W_squared)
+  #V <- tcrossprod(W_squared,t(sigmas**2))+tau**2
+  V <- eigenProduct(W_squared, sigmas**2) + tau**2
+  V_squared <- V**2
+  browser()
+  return(list("objective"= -0.5*(const-sum(log(V))-sum(U_j/V)),
+              "gradient" = -(colSums(W_squared*repmat(sigmas,n,1)*t(repmat(U_j,k,1))/repmat(V_squared,1,k)) - colSums(W_squared*repmat(sigmas,n,1)/repmat(V,1,k)))))
+}
+
+
+# Returns the (minus) log likelihood of the model for a particular observation i in a list together with the gradient with respect to w_i
+# Input:
+# C_tilde - if p1=0 then C_tilde = matrix(0,m,k), otherwise it is calculated as follows:
+# for (h in 1:k){
+#    C_tilde[,h] = tcrossprod(gammas[,(1+(h-1)*p1):(h*p1)],c1_i)
+# }
+# sigmas_squared = sigmas**2
+# crossprod_deltas_c2_i = tcrossprod(deltas,t(C2[i,]))
+minus_log_likelihood_w <- function(w_i, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i){
+  k <- length(w_i)
+  m <- dim(mus)[1]
+  c1_i_ <- calc_C1_W_interactions(w_i,c1_i)
+  V <- tcrossprod(sigmas_squared,w_i**2)+tau**2
+  V_rep <- repmat(V,1,k)
+  U_i <- tcrossprod(mus,w_i) + crossprod_deltas_c2_i + tcrossprod(gammas,c1_i_) - t(x_i)
+  U_i_squared <- U_i**2
+  w_i_rep <- repmat(w_i,m,1)
+  fval <- -0.5*(const-sum(log(V))-sum(U_i_squared/V))
+  gval <- colSums(w_i_rep*sigmas_squared/V_rep) + colSums(( (mus+C_tilde)*repmat(U_i,1,k)*V_rep - w_i_rep*sigmas_squared*repmat(U_i_squared,1,k) ) / repmat(V**2,1,k))
+  browser()
+  return(list("objective"= fval, "gradient" = gval))
+}
+
+#' @importFrom matrixcalc hadamard.prod
+calc_C1_W_interactions <- function(W,C1){
+  n <- nrow(W)
+  k <- ncol(W)
+  p1 <- ncol(C1)
+  if (p1){
+    return( hadamard.prod(Reshape(Reshape(apply(W, 2, function(v) repmat(v,1,p1)), n*p1*k,1), n,p1*k), repmat(C1, 1, k)) )
+  }else{
+    return(matrix(0,n,0))
+  }
+}
+
 tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C1, gammas_hat, C1.map, tau, vars.mle, constrain_mu, max_iters, parallel, num_cores){
   
   flog.debug("Starting function 'tca.fit_means_vars'...")
@@ -254,7 +265,8 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       C2_tilde <- if (p2>0) C2/t(repmat(W_norms,p2,1)) else C2
     }else{
       flog.debug("Calculate W_norms")
-      W_norms <- (tcrossprod(W**2,sigmas_hat**2)+tau_hat**2 )**0.5
+      #W_norms <- (tcrossprod(W**2,sigmas_hat**2)+tau_hat**2 )**0.5
+      W_norms <- eigenW_norms(W^2 ,(sigmas_hat^2 %>% t), tau_hat, 1)
     }
     X_tilde <- X/W_norms
     
@@ -262,30 +274,48 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
     
     if (sum(colSums(mus_hat)) == 0){
       #if (parallel) clusterExport(cl, varlist = c("W_tilde","C2_tilde","C1_tilde","X_tilde","lb","ub","k","p1","p2","lsqlincon"), envir=environment())
-      res <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j) lsqlincon(cbind(W_tilde,C2_tilde,C1_tilde), X_tilde[,j], lb = lb,  ub = ub))
+      res <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j) {
+        lsqlincon(cbind(W_tilde,C2_tilde,C1_tilde), X_tilde[,j], lb = lb,  ub = ub)})
     }else{
       #if (parallel) clusterExport(cl, c("W_norms","W","C2","C1_","X_tilde","lb","ub","k","p1","p2","lsqlincon"), envir=environment())
-      res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) lsqlincon(cbind(W/t(repmat(W_norms[,j],k,1)),
-                                                      if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
-                                                      if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_),
-                                                X_tilde[,j], lb = lb,  ub = ub))
+      res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j){
+        lsqlincon(cbind(W/t(repmat(W_norms[,j],k,1)),
+                        if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
+                        if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_),
+                  X_tilde[,j], lb = lb,  ub = ub)
+      })
+      browser()
     }
     
     # Update estimtes
-    tic(); flog.info('update estimates1')
+    flog.debug('Update estimates mus, deltas, gammas')
     
-    for (j in 1:m){
-      mus_hat[j,] = res[[j]][1:k]
-      deltas_hat[j,seq(1,p2,length=p2)] = res[[j]][seq(k+1,k+p2,length=p2)]
-      gammas_hat[j,seq(1,k*p1,length=k*p1)] = res[[j]][seq(k+p2+1,k+p2+p1*k,length=p1*k)]
+    if(p1==0 || p2==0){
+      mus_hat <- res %>% unlist %>% matrix(., ncol = k)
+    }else{
+      tmp_res <- res %>% unlist %>% matrix(., ncol = k + p2 + p1*k)
+      mus_hat <- tmp_res[,1:k]
+      deltas_hat <- tmp_res[,k+1:k+p2]
+      gammas_hat <- tmp_res[,k+p2+1,k+p2+p1*k]
     }
+    
+    # pbmclapply(1:m, mc.cores = cores, function(j){
+    #   mus_hat[j,] <<- res[[j]][1:k]
+    #   deltas_hat[j,seq(1,p2,length=p2)] = res[[j]][seq(k+1,k+p2,length=p2)]
+    #   gammas_hat[j,seq(1,k*p1,length=k*p1)] = res[[j]][seq(k+p2+1,k+p2+p1*k,length=p1*k)]
+    # })
+    # for (j in 1:m){
+    #   mus_hat[j,] = res[[j]][1:k]
+    #   deltas_hat[j,seq(1,p2,length=p2)] = res[[j]][seq(k+1,k+p2,length=p2)]
+    #   gammas_hat[j,seq(1,k*p1,length=k*p1)] = res[[j]][seq(k+p2+1,k+p2+p1*k,length=p1*k)]
+    # }
     toc()
+    
     
     # (2) Estimate the variances (sigmas, tau)
     
     # Calculate some quantities that will be repeatedly used throughout the optimization in this step
-    U <- (tcrossprod(W,mus_hat) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2
-    
+    U <- (eigenProduct(W,mus_hat %>% t) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2
     if (vars.mle){
       
       if (sum(colSums(sigmas_hat)) == 0){
@@ -303,20 +333,23 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       lb <- numeric(k)+config[["min_sd"]]
       ub <- numeric(k)+Inf
       if (parallel) clusterExport(cl, c("lb","ub","n","k","U","const","W_squared","sigmas_hat","tau_hat","nloptr_opts","minus_log_likelihood_sigmas"), envir=environment())
-      res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) nloptr( x0=sigmas_hat[j,],
-                                              eval_f = function(x,U_j,W_squared,const,tau_hat) minus_log_likelihood_sigmas(x,U_j,W_squared,const,tau_hat),
-                                              lb = lb,
-                                              ub = ub,
-                                              opts = nloptr_opts,
-                                              U_j = U[,j],
-                                              W_squared = W_squared,
-                                              const = const,
-                                              tau_hat = tau_hat)$solution)
+      res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j){
+        nloptr( x0=sigmas_hat[j,],
+                eval_f = function(x,U_j,W_squared,const,tau_hat) minus_log_likelihood_sigmas(x,U_j,W_squared,const,tau_hat),
+                lb = lb,
+                ub = ub,
+                opts = nloptr_opts,
+                U_j = U[,j],
+                W_squared = W_squared,
+                const = const,
+                tau_hat = tau_hat)$solution
+        })
       
-      tic(); flog.info('update estimates')
+      flog.info('update estimates')
       for (j in 1:m){
         sigmas_hat[j,] = res[[j]]
       }
+      browser()
       toc()
       
       # (2.3) Estimate tau
@@ -366,7 +399,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
     toc()
     
     flog.debug("Test for convergence.")
-    ll_new <- -minus_log_likelihood_tau(U,W_squared,sigmas_hat,const,tau_hat)[[1]]
+    ll_new <- -minus_log_likelihood_tau(U,W_squared,sigmas_hat,const,tau_hat)[[1]]   
     # Test for convergence
     ll_diff = ll_new-ll_prev
     flog.debug("ll_new=%s, ll_prev=%s, ll_diff=%s, diff_threshold=%s",ll_new,ll_prev,ll_diff,config[["epsilon"]]*abs(ll_new))
@@ -408,6 +441,7 @@ tca.fit_W <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C1, ga
   
   cl <- if (parallel) init_cluster(num_cores) else NULL
   if (parallel) clusterExport(cl, c("lb","ub","ones","nloptr_opts","X","W","C1","C2","n","k","p1","m","const","tau_hat","mus_hat","gammas_hat","deltas_hat","sigmas_squared","minus_log_likelihood_w","calc_C1_W_interactions"), envir=environment())
+  browser()
   res <- pbmclapply(ignore.interactive = T, 1:n,mc.cores = cores, function(i) nloptr( x0=W[i,],
                                           eval_f = function(x, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i) minus_log_likelihood_w(t(x), x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i),
                                           eval_g_eq = function(x, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i) list("constraints" = crossprod(x,ones)-1, "jacobian" = ones),
@@ -529,7 +563,6 @@ tca.fit <- function(X, W, C1, C1.map, C2, refit_W, tau, vars.mle, constrain_mu, 
       mdl2.coef <- summary(mdl1.fit$coefficients)
       mdl2.cov.names <- mdl2.coef %>% rownames %>% .[-1]
       
-      browser()
       deltas_gammas_hat_pvals <- sapply(mdl1.cov.names, function(x){
         if (x %in% rownames(mdl1.coef)){
           return(mdl1.coef[x,'Pr(>|t|)'])
@@ -664,7 +697,6 @@ estimate_Z_cpp <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C
     colnames(Z_hat[[h]]) <- colnames(X)
     rownames(Z_hat[[h]]) <- rownames(X)
   }
-  #browser()
   # Calculate quantities that can be calculated only once
   W_prime <- replicate(n, matrix(0,k,k), simplify=F)
   for (i in 1:n){
@@ -739,8 +771,9 @@ tensor_cpp <- function(X, tca.mdl, scale = FALSE, parallel = FALSE, num_cores = 
   return( estimate_Z_cpp(t(X), W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C1, gammas_hat, scale, parallel, num_cores) )
 }
 
-#### run tensor ####
-
+##### input call ####
+args[[1]] <- '../LEVEL3_QCDB/trans/COPD_CHIP_beta_inner.txt'
+args[[2]] <- '../LEVEL3_QCDB/decompose/COPD_CHIP_beta_inner_cellFraction.txt'
 #input_X <- fread(args[[1]], nThread = 4, verbose = T)
 input_X <- vroom::vroom(args[[1]], delim = ',', altrep = T, num_threads = 2, progress = T ) %>% 
     column_to_rownames('probe') %>% 
@@ -755,6 +788,7 @@ epi_W <- vroom::vroom(args[[2]]) %>%
 
 gc()
 
+#### run tensor ####
 tca.mdl <- tca_pbmc(input_X, epi_W, constrain_mu = T, debug = T)
 write_rds(tca.mdl, file = paste0(args[[2]],'.rds'))
 tensor_res <- tensor_cpp(input_X, tca.mdl)

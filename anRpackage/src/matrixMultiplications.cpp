@@ -39,6 +39,28 @@ SEXP eigenT(MatrixXd A){
   return Rcpp::wrap(B);
 }
 
+// [[Rcpp::export]]
+SEXP eigenW_norms(MatrixXd W, MatrixXd sigmas_hat, double tau_hat, int n_cores){
+  setNbThreads(n_cores);
+  MatrixXd C = W * sigmas_hat;
+  MatrixXd D = (C.array()  + pow(tau_hat,2)).matrix();
+  return wrap(D.cwiseSqrt());
+}
+
+// [[Rcpp::export]]
+SEXP eigenHadamard(MatrixXd A){
+  return wrap(A.cwiseProduct(A));
+}
+
+// [[Rcpp::export]]
+SEXP eigenProduct(MatrixXd A, MatrixXd B){
+  return wrap(A*B);
+}
+
+// [[Rcpp::export]]
+SEXP eigenSqrt(MatrixXd A){
+  return wrap(A.cwiseSqrt());
+}
 
 // You can include R code blocks in C++ files processed with sourceCpp
 // (useful for testing and development). The R code will be automatically 
