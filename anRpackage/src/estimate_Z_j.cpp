@@ -36,7 +36,6 @@ MatrixXd estimate_Z_j_cpp(MatrixXd& W, VectorXd& mus_hat_j, VectorXd& sigmas_hat
   int k = W.cols();
   int p1= C1.cols();
   MatrixXd Sig_j_orig = createDiagonalMatrix(sigmas_hat_j);
-  Sig_j_orig *= Sig_j_orig;
   
   MatrixXd Sig_j = Sig_j_orig.inverse();
   MatrixXd gammas_hat_j_reshape;
@@ -54,7 +53,7 @@ MatrixXd estimate_Z_j_cpp(MatrixXd& W, VectorXd& mus_hat_j, VectorXd& sigmas_hat
     
     VectorXd S_ij_tmptmp = W.row(i) * C2_prime_j(i);
     MatrixXd S_ij_tmp = (Sig_j * (mus_hat_j + C1_prime_j) + S_ij_tmptmp);
-    VectorXd S = S_ij * S_ij_tmp;
+    VectorXd S = S_ij.transpose().eval() * S_ij_tmp;
     Z_j_hat.row(i) = S;
     /*
     cout << "W_prime_j < Sig_j_orig" << endl;
