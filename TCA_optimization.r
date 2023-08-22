@@ -373,6 +373,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
                            )$solution
       })
       rm(Dmat_tmp, dvec_tmp, Amat_tmp, bvec_tmp)
+      gc()
       # res <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j) {
       #   lsqlincon(cbind(W_tilde,C2_tilde,C1_tilde), 
       #             X_tilde[,j], 
@@ -524,6 +525,8 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
                                    meq = 0)$solution
         rslt / norms_tmp[,j]
       })
+      rm(norms_tmp, d_tmp, x_tmp)
+      gc()
       
       # res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) {
       #   x <- W_squared_/t(repmat(V[,j],ncol(W_squared_),1));
