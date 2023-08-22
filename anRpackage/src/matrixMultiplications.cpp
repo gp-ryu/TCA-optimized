@@ -48,8 +48,8 @@ SEXP eigenW_norms(MatrixXd W, MatrixXd sigmas_hat, double tau_hat, int n_cores){
 }
 
 // [[Rcpp::export]]
-SEXP eigenHadamard(MatrixXd A){
-  return wrap(A.cwiseProduct(A));
+SEXP eigenArrayProduct(ArrayXXd A, ArrayXXd B){
+    return wrap(A * B);
 }
 
 // [[Rcpp::export]]
