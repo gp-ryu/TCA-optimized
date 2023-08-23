@@ -11,11 +11,11 @@ library(matrixStats)
 
 sourceCpp('anRpackage/src/matrixMultiplications.cpp')
 sourceCpp('anRpackage/src/estimate_Z_j.cpp')
-cores = 16
+
 
 #load('../hannum.chr22.RData')
 args <- commandArgs(trailingOnly = T)
-
+cores = args[[4]]
 #tca.mdl <- tca(hannum$X, hannum$W, C1 = hannum$cov[,c('age','gender')], C2 = hannum$cov[,3:ncol(hannum$cov)])
 
 #### tca_cpp ####
