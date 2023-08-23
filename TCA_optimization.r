@@ -299,6 +299,7 @@ calc_C1_W_interactions <- function(W,C1){
 }
 
 tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C1, gammas_hat, C1.map, tau, vars.mle, constrain_mu, max_iters, parallel, num_cores){
+
   
   flog.debug("Starting function 'tca.fit_means_vars'...")
   
@@ -370,7 +371,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
                            Amat = t(Amat_tmp),
                            bvec = bvec_tmp,
                            meq = 0
-                           )$solution
+        )$solution
       })
       rm(Dmat_tmp, dvec_tmp, Amat_tmp, bvec_tmp)
       gc()
@@ -406,9 +407,9 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
     flog.debug('Update estimates mus, deltas, gammas')
     
     if(p1==0 || p2==0){
-      mus_hat <- res %>% unlist %>% matrix(., ncol = k)
+      mus_hat <- res %>% unlist %>% matrix(., nrow = k) %>% t
     }else{
-      tmp_res <- res %>% unlist %>% matrix(., ncol = k + p2 + p1*k)
+      tmp_res <- res %>% unlist %>% matrix(., nrow = k + p2 + p1*k) %>% t
       mus_hat <- tmp_res[,1:k]
       deltas_hat <- tmp_res[,k+1:k+p2]
       gammas_hat <- tmp_res[,k+p2+1,k+p2+p1*k]
@@ -427,7 +428,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
     
     
     # (2) Estimate the variances (sigmas, tau)
-   
+    
     # Calculate some quantities that will be repeatedly used throughout the optimization in this step
     U <- (eigenProduct(W,mus_hat %>% t) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2
     if (vars.mle){
@@ -458,7 +459,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
                 W_squared = W_squared,
                 const = const,
                 tau_hat = tau_hat)$solution
-        })
+      })
       
       flog.info('update estimates')
       sigmas_hat <- res %>% unlist %>% matrix(., nrow = k) %>% t 
@@ -493,13 +494,14 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       # calculate weights matrix V
       if (sum(colSums(sigmas_hat)) == 0){
         V <- matrix(1,n,m)
+        
         norms_tmp <- W_squared_^2 %>% colSums %>% repmat(., m,1) %>% t %>% eigenSqrt()
         d_tmp <- U
         x_tmp <- W_squared_
       }else{
         V <- abs(U - tcrossprod(W_squared_, cbind(sigmas_hat**2, matrix(tau_hat**2,m,1))))
         V[V < config[["V_weight_limit"]]] <- config[["V_weight_limit"]]
-        norms_tmp <- crossprod(W_squared_^2, V^2) %>% eigenSqrt
+        
         d_tmp <- U/V
         x_tmp <- W_squared_
       }
@@ -512,20 +514,32 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       beq     = NULL
       b       = NULL
       res_matopt <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) {
-        Dmat_tmp <- crossprod(x_tmp, x_tmp)/tcrossprod(norms_tmp[,j], norms_tmp[,j])
-        dvec_tmp <- crossprod(x_tmp, d_tmp[,j])/norms_tmp[,j]
+        if (sum(colSums(sigmas_hat)) == 0){
+          norms <- norms_tmp[,j]
+          
+          Dmat_tmp <- crossprod(x_tmp)/tcrossprod(norms_tmp[,j])
+          dvec_tmp <- crossprod(x_tmp, d_tmp[,j])/norms_tmp[,j]
+          bvec <- c(beq, b, lb*norms, ub)
+        }else{
+          x_tmp <- ( x_tmp/matrix(unlist(V[, j])%>%rep(., 7),ncol=ncol(W_squared_)) )
+          norms <- (colSums(x_tmp**2))**0.5
+          x_tmp <- ( x_tmp/t(matrix(norms%>%rep(.,nrow(x_tmp)),ncol=nrow(x_tmp))) )
+          
+          Dmat_tmp <- crossprod(x_tmp)
+          dvec_tmp <- crossprod(x_tmp, d_tmp[,j])
+          bvec <- c(beq, b, lb*norms, ub)
+        }
         
         diag_lb <- diag(length(lb))
         Amat <- rbind(Aeq, A, diag_lb, diag_ub)
-        bvec <- c(beq, b, lb*norms_tmp[,j], ub)
         rslt <- quadprog::solve.QP(Dmat = Dmat_tmp, 
                                    dvec = dvec_tmp, 
                                    Amat = Amat,  
                                    bvec = bvec, 
                                    meq = 0)$solution
-        rslt / norms_tmp[,j]
+        rslt / norms
       })
-      rm(norms_tmp, d_tmp, x_tmp)
+      rm(norms_tmp, d_tmp, x_tmp) %>% suppressWarnings
       gc()
       
       # res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) {
@@ -536,8 +550,8 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       #   lsqlincon(x, U[,j]/V[,j], lb = lb*norms)/norms
       # })
       
-      tmp_res <- res_matopt %>% unlist %>% matrix(., nrow = k+1) %>% t %>% sqrt
-      sigmas_hat <- tmp_res[,1:k]
+      tmp_res <- res_matopt %>% unlist %>% matrix(., nrow = k+1) %>% t 
+      sigmas_hat <- tmp_res[,1:k] %>% sqrt
       tau_hat <- tmp_res[,k+1] %>% mean %>% sqrt
       
       # for (j in 1:m){
@@ -591,20 +605,20 @@ tca.fit_W <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C1, ga
   cl <- if (parallel) init_cluster(num_cores) else NULL
   if (parallel) clusterExport(cl, c("lb","ub","ones","nloptr_opts","X","W","C1","C2","n","k","p1","m","const","tau_hat","mus_hat","gammas_hat","deltas_hat","sigmas_squared","minus_log_likelihood_w","calc_C1_W_interactions"), envir=environment())
   res <- pbmclapply(ignore.interactive = T, 1:n,mc.cores = cores, function(i) nloptr( x0=W[i,],
-                                          eval_f = function(x, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i) minus_log_likelihood_w(t(x), x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i),
-                                          eval_g_eq = function(x, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i) list("constraints" = crossprod(x,ones)-1, "jacobian" = ones),
-                                          lb = lb,
-                                          ub = ub,
-                                          opts = nloptr_opts,
-                                          x_i = t(X[i,]),
-                                          c1_i = t(C1[i,]),
-                                          mus = mus_hat,
-                                          tau = tau_hat,
-                                          gammas = gammas_hat,
-                                          const = const,
-                                          C_tilde = if (p1>0) apply(as.matrix(1:k),1,function(h) tcrossprod(gammas_hat[,(1+(h-1)*p1):(h*p1)],t(C1[i,]))) else matrix(0,m,k),
-                                          sigmas_squared = sigmas_squared,
-                                          crossprod_deltas_c2_i = tcrossprod(deltas_hat,t(C2[i,])) )$solution )
+                                                                                      eval_f = function(x, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i) minus_log_likelihood_w(t(x), x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i),
+                                                                                      eval_g_eq = function(x, x_i, c1_i, mus, tau, gammas, const, C_tilde, sigmas_squared, crossprod_deltas_c2_i) list("constraints" = crossprod(x,ones)-1, "jacobian" = ones),
+                                                                                      lb = lb,
+                                                                                      ub = ub,
+                                                                                      opts = nloptr_opts,
+                                                                                      x_i = t(X[i,]),
+                                                                                      c1_i = t(C1[i,]),
+                                                                                      mus = mus_hat,
+                                                                                      tau = tau_hat,
+                                                                                      gammas = gammas_hat,
+                                                                                      const = const,
+                                                                                      C_tilde = if (p1>0) apply(as.matrix(1:k),1,function(h) tcrossprod(gammas_hat[,(1+(h-1)*p1):(h*p1)],t(C1[i,]))) else matrix(0,m,k),
+                                                                                      sigmas_squared = sigmas_squared,
+                                                                                      crossprod_deltas_c2_i = tcrossprod(deltas_hat,t(C2[i,])) )$solution )
   if (parallel) stop_cluster(cl)
   for (i in 1:n){
     W_hat[i,] = res[[i]]
@@ -687,54 +701,54 @@ tca.fit <- function(X, W, C1, C1.map, C2, refit_W, tau, vars.mle, constrain_mu, 
     # res <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j) {
     res <- ({j = 1
     
-      colnames(C1_) <- c(seq(1:ncol(C1_)) %>% paste0('V',.))
-      df = data.frame(y = X_tilde[,j],
-                      cbind(W/t(repmat(W_norms[,j],k,1)),
-                            if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
-                            if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_)
-                      );
-      df_y = X_tilde[,j] %>% as.matrix
-      df_x = matrix(c(W/t(repmat(W_norms[,j],k,1)),
-                      if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
-                      if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_),
-                    nrow = nrow(df_y))
-      colnames(df_x) <- c(colnames(W), colnames(C2), colnames(C1_))
-      rownames(df_x) <- rownames(df_y)
-      
-      
-      mdl1.fit <- lm(y~., data = df)
-      mdl1.coef <- summary(mdl1.fit)$coefficients
-      mdl1.cov.names <- colnames(df)[colnames(df) != 'y']
-
-      
-      mdl2.fit <- .lm.fit(df_x, df_y)
-      mdl2.coef <- summary(mdl1.fit$coefficients)
-      mdl2.cov.names <- mdl2.coef %>% rownames %>% .[-1]
-      
-      deltas_gammas_hat_pvals <- sapply(mdl1.cov.names, function(x){
-        if (x %in% rownames(mdl1.coef)){
-          return(mdl1.coef[x,'Pr(>|t|)'])
-        }
-        else {
-          return(NA)
-        }
-      })
-      
-      #deltas_gammas_hat_pvals <- summary(mdl1.fit)$coefficients[2:(1+k+p1*k+p2),4];
-      gammas_hat_pvals.joint <- numeric(p1)+1
-      if (p1){
-        C1_alt <- C1_/t(repmat(W_norms[,j],k*p1,1))
-        for (d in 1:p1){
-          C1_null <- C1_alt[,setdiff(1:(p1*k),seq(d,k*p1,p1))]
-          df = data.frame(y = X_tilde[,j], cbind(W/t(repmat(W_norms[,j],k,1)),if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,C1_null));
-          mdl0.fit <- lm(y~., data = df)
-          anova.fit <- anova(mdl0.fit,mdl1.fit);
-          gammas_hat_pvals.joint[d] <- anova.fit$`Pr(>F)`[2];
-        }
+    colnames(C1_) <- c(seq(1:ncol(C1_)) %>% paste0('V',.))
+    df = data.frame(y = X_tilde[,j],
+                    cbind(W/t(repmat(W_norms[,j],k,1)),
+                          if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
+                          if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_)
+    );
+    df_y = X_tilde[,j] %>% as.matrix
+    df_x = matrix(c(W/t(repmat(W_norms[,j],k,1)),
+                    if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
+                    if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_),
+                  nrow = nrow(df_y))
+    colnames(df_x) <- c(colnames(W), colnames(C2), colnames(C1_))
+    rownames(df_x) <- rownames(df_y)
+    
+    
+    mdl1.fit <- lm(y~., data = df)
+    mdl1.coef <- summary(mdl1.fit)$coefficients
+    mdl1.cov.names <- colnames(df)[colnames(df) != 'y']
+    
+    
+    mdl2.fit <- .lm.fit(df_x, df_y)
+    mdl2.coef <- summary(mdl1.fit$coefficients)
+    mdl2.cov.names <- mdl2.coef %>% rownames %>% .[-1]
+    
+    deltas_gammas_hat_pvals <- sapply(mdl1.cov.names, function(x){
+      if (x %in% rownames(mdl1.coef)){
+        return(mdl1.coef[x,'Pr(>|t|)'])
       }
-      return(c(deltas_gammas_hat_pvals,gammas_hat_pvals.joint));
-      
-      } )
+      else {
+        return(NA)
+      }
+    })
+    
+    #deltas_gammas_hat_pvals <- summary(mdl1.fit)$coefficients[2:(1+k+p1*k+p2),4];
+    gammas_hat_pvals.joint <- numeric(p1)+1
+    if (p1){
+      C1_alt <- C1_/t(repmat(W_norms[,j],k*p1,1))
+      for (d in 1:p1){
+        C1_null <- C1_alt[,setdiff(1:(p1*k),seq(d,k*p1,p1))]
+        df = data.frame(y = X_tilde[,j], cbind(W/t(repmat(W_norms[,j],k,1)),if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,C1_null));
+        mdl0.fit <- lm(y~., data = df)
+        anova.fit <- anova(mdl0.fit,mdl1.fit);
+        gammas_hat_pvals.joint[d] <- anova.fit$`Pr(>F)`[2];
+      }
+    }
+    return(c(deltas_gammas_hat_pvals,gammas_hat_pvals.joint));
+    
+    } )
     ####  
     
     if (parallel) stop_cluster(cl)
@@ -864,14 +878,14 @@ estimate_Z_cpp <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C
       Z_hat[[h]][,j] = res[[j]][,h]
     }
   }
-
+  
   # add rownames and colnames and transpose matrices
-
+  
   for (h in 1:k){
     rownames(Z_hat[[h]]) <- rownames(X)
     colnames(Z_hat[[h]]) <- colnames(X)
     Z_hat[[h]] <- t(Z_hat[[h]])
-
+    
   }
   return(Z_hat)
 }
@@ -900,7 +914,7 @@ tensor_cpp <- function(X, tca.mdl, scale = FALSE, parallel = FALSE, num_cores = 
   tensor.validate_input(X, scale, parallel, num_cores, log_file, debug)
   
   # progress bar options
-#  op <- if (verbose) pboptions(nout = config$nout, type = config[["type"]]) else pboptions(nout = config$nout, type = "none")
+  #  op <- if (verbose) pboptions(nout = config$nout, type = config[["type"]]) else pboptions(nout = config$nout, type = "none")
   
   flog.info("Starting tensor for estimating Z...")
   
@@ -914,7 +928,7 @@ tensor_cpp <- function(X, tca.mdl, scale = FALSE, parallel = FALSE, num_cores = 
   gammas_hat <- tca.mdl[["gammas_hat"]]
   C1 <- tca.mdl[["C1"]]
   C2 <- tca.mdl[["C2"]]
-
+  
   return( estimate_Z_cpp(t(X), W, mus_hat, sigmas_hat, tau_hat, C2, deltas_hat, C1, gammas_hat, scale, parallel, num_cores) )
 }
 
@@ -923,15 +937,15 @@ tensor_cpp <- function(X, tca.mdl, scale = FALSE, parallel = FALSE, num_cores = 
 # args[[2]] <- '../LEVEL3_QCDB/decompose/COPD_CHIP_beta_inner_cellFraction.txt'
 #input_X <- fread(args[[1]], nThread = 4, verbose = T)
 input_X <- vroom::vroom(args[[1]], delim = ',', altrep = T, num_threads = 2, progress = T ) %>% 
-    column_to_rownames('probe') %>% 
-    as.matrix
+  column_to_rownames('probe') %>% 
+  as.matrix
 
 # if (args[[3]])
 # tmp_out <- epidish(tmp, ref.m = centDHSbloodDMC.m, method = 'RPC')
 
 epi_W <- vroom::vroom(args[[2]]) %>% 
-    column_to_rownames('probe') %>% 
-    as.matrix
+  column_to_rownames('probe') %>% 
+  as.matrix
 
 gc()
 
