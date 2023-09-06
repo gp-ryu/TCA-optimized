@@ -1,14 +1,14 @@
-// [[Rcpp::plugins(openmp)]]
-// [[Rcpp::depends(RcppArmadillo, RcppEigen)]]
-
-#include <omp.h>
+// [[Rcpp::depends(RcppEigen)]]
 #include <Rcpp.h>
 #include <RcppEigen.h>
+#include <string>
 
 using namespace std;
 using namespace Rcpp;
 using namespace Eigen;
 
+typedef Map<MatrixXd> MapMatd;
+typedef Map<VectorXd> MapVecd;
 
 // [[Rcpp::export]]
 SEXP eigenMatMult(Eigen::MatrixXd A, 
@@ -62,10 +62,20 @@ SEXP eigenSqrt(MatrixXd A){
   return wrap(A.cwiseSqrt());
 }
 
-// You can include R code blocks in C++ files processed with sourceCpp
-// (useful for testing and development). The R code will be automatically 
-// run after the compilation.
-//
+// [[Rcpp::export]]
+SEXP AAt(const MapMatd& A){
+  int n = A.rows();
+  int m = A.cols();
+  MatrixXd AAt = MatrixXd(n,n).setZero().selfadjointView<Lower>()
+                              .rankUpdate(A);
+  return wrap(AAt);
+}
 
-/*** R
-*/
+// [[Rcpp::export]]
+SEXP AtA(const MapMatd& A){
+  int n = A.rows();
+  int m = A.cols();
+  MatrixXd AtA = MatrixXd(m,m).setZero().selfadjointView<Lower>()
+                              .rankUpdate(A.adjoint());
+  return wrap(AtA);
+}
