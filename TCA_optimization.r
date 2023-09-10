@@ -3,7 +3,7 @@ library(microbenchmark)
 library(TCA)
 library(Rcpp)
 library(RcppEigen)
-library(RcppProgress)
+# library(RcppProgress)
 library(RcppClock)
 library(matrixcalc)
 library(pracma)
@@ -19,7 +19,7 @@ source('anRpackage/R/tca.R')
 source('anRpackage/R/tensor.R')
 sourceCpp('anRpackage/src/estimate_Z_j.cpp')
 sourceCpp('anRpackage/src/matrixMultiplications.cpp')
-sourceCpp('anRpackage/src/estimate_Z_j_optimize.cpp')
+# sourceCpp('anRpackage/src/estimate_Z_j_optimize.cpp')
 
 
 args <- commandArgs(trailingOnly = T)
@@ -46,7 +46,7 @@ gc()
 
 
 ## run tca ----
-# tca.mdl <- tca_pbmc(input_X, epi_W, constrain_mu = T, debug = T, max_iters = 20)
+tca.mdl <- tca_pbmc(input_X, epi_W, constrain_mu = T, debug = T, max_iters = 20)
 write_rds(tca.mdl, file = paste0(args[[2]],'.rds'))
 gc()
 # tca.mdl <- readRDS(paste0(args[[2]],'.rds'))

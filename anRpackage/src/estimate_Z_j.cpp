@@ -34,13 +34,39 @@ MatrixXd outerprodV(const VectorXd & A) {
                                .rankUpdate(A.adjoint());
   return AtA;
 }
-
+// [[Rcpp::export]]
 MatrixXd outerprodM(const MapMatd& A){
-  int n = A.rows();
+  int n = A.cols();
   MatrixXd AtA = MatrixXd(n,n).setZero().selfadjointView<Lower>()
                               .rankUpdate(A.adjoint());
   return AtA;
 }
+
+// [[Rcpp::export]]
+MatrixXd outerprodMM(MatrixXd& A, MatrixXd& B) {
+  MatrixXd res = A.adjoint() * B;
+  return res;
+}
+// [[Rcpp::export]]
+MatrixXd outerprodMM_p(MatrixXd& A, MatrixXd& B) {
+  initParallel();
+  MatrixXd res = A.adjoint() * B;
+  return res;
+}
+// [[Rcpp::export]]
+MatrixXd outerprodMV_p(MatrixXd& A, VectorXd& B) {
+  initParallel();
+  MatrixXd res = A.adjoint() * B;
+  return res;
+}
+
+// [[Rcpp::export]]
+MatrixXd innerprodMM(MatrixXd& A, MatrixXd& B) {
+  MatrixXd res = A * B.adjoint();
+  return res;
+}
+
+
 
 
 

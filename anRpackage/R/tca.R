@@ -8,13 +8,13 @@
 
 minus_log_likelihood_tau <- function(U,W_squared,sigmas,const,tau, isll = FALSE){
   m <- ncol(U)
-  res <- matrix(0,m,2)
-  V <- tcrossprod(W_squared, sigmas^2) + tau^2
-  sumU <- sum(U)
-  sumV <- sum(V)
+  # res <- matrix(0,m,2)
+  V <- innerprodMM(W_squared, sigmas^2) + tau^2
+  # sumU <- sum(U)
+  # sumV <- sum(V)
   # UbyV <- U/V
-  if(isll) return((-.5*(const*m - sum(log(V)) - sum(U/V))))
-  return(list( "objective" = sum((-.5*(const*m - sum(log(V)) - sum(U/V)))), "gradient" = sum((-tau * (sum(U/V^2) - sum(1/V)))) ))
+  if(isll) return((-.5*(const*m - sumlog_p(U) - sum(U/V))))
+  return(list( "objective" = sum((-.5*(const*m - sumlog_p(V) - sum(U/V)))), "gradient" = sum((-tau * (sum(U/V^2) - sum(1/V)))) ))
  
   { 
   # t2 <- (-tau * (colSums(UbyVbyV) - colSums(onebyV)))
@@ -136,7 +136,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       dvec_tmp <- crossprod(cbind(W_tilde,C2_tilde,C1_tilde), X/W_norms)
       Amat_tmp <- rbind( diag(length(lb)), -diag(length(ub)))
       bvec_tmp <- c(lb, -ub)
-      
+    
       res <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j){
         quadprog::solve.QP(Dmat = Dmat_tmp, 
                            dvec = dvec_tmp[,j] %>% matrix(ncol = 1),
@@ -156,15 +156,14 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       if(p1 == 0 || p2 == 0) conds = T
       res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j){
         if(conds){
-          lsqlincon(W/W_norms[,j], X_tilde[,j], lb = lb, ub = ub)
+          lsqlincon_opt(W/W_norms[,j], X_tilde[,j], lb = lb, ub = ub)
         }else{
-          pracma::lsqlincon(cbind(W/W_norms[,j],
+          pracma::lsqlincon_opt(cbind(W/W_norms[,j],
                                   if (p2>0) C2/t(repmat(W_norms[,j],p2,1)) else C2,
                                   if (p1>0) C1_/t(repmat(W_norms[,j],k*p1,1)) else C1_),
                             X_tilde[,j], lb = lb,  ub = ub)
         }
       })
-      # browser()
       rm(W_norms, X_tilde)
       gc()
     }
@@ -281,17 +280,17 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       # Learn the variances using gmm
       flog.debug("Estimate sigmas, tau")
       lb <- numeric(k+1)+config[["min_sd"]]
-      
+      browser()
       # calculate weights matrix V
-      conds   <- (sum(colSums(sigmas_hat)) == 0)
+      conds   <- (sum(sigmas_hat) == 0)
       if (conds){
         V <- matrix(1,n,m)
-        
         # norms_tmp <- W_squared_^2 %>% colSums %>% repmat(., m,1) %>% t %>% eigenSqrt()
-        norms_tmp <- sqrt(colSums(W_squared_^2))
+        norms_tmp <- colNorm(W_squared_)
+        # norms_tmp <- sqrt(colSums(W_squared_^2))
         x_tmp <- W_squared_
-        Dmat_tmp <- AtA(W_squared_ %*% diag(1/norms_tmp))
-        dvec_tmp <- crossprod(W_squared_%*%diag(1/norms_tmp), (tcrossprod(W,mus_hat ) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2)
+        Dmat_tmp <- AtA(W_squared_/norms_tmp)
+        dvec_tmp <- crossprod(W_squared_/(norms_tmp), (tcrossprod(W,mus_hat ) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2)
       }else{
         V <- abs((tcrossprod(W,mus_hat ) + tcrossprod(C2,deltas_hat) + tcrossprod(C1_,gammas_hat) - X)**2 - tcrossprod(W_squared_, cbind(sigmas_hat**2, matrix(tau_hat**2,m,1))))
         V[V < config[["V_weight_limit"]]] <- config[["V_weight_limit"]]
@@ -307,26 +306,27 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       ub      = NULL
       beq     = NULL
       b       = NULL
-      res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) {
+      res <- pbmclapply(ignore.interactive = T, 1:m, mc.cores = cores, function(j) {
         if (conds){
           dvec_tmp <- dvec_tmp[,j]
           norms_tmptmp <- norms_tmp
         }else{
-          x_tmp <- ( x_tmp/V[,j] )
-          norms_tmptmp <- sqrt(colSums(x_tmp**2))
-          x_tmp <- ( x_tmp %*% diag(1/norms_tmptmp) )
+          x_tmptmp <-  x_tmp/V[,j]
+          # norms_tmptmp <-colNorm(x_tmptmp); names(norms_tmptmp) <- colnames(x_tmptmp)
+          norms_tmptmp <-sqrt(colSums(x_tmptmp^2))
+          x_tmptmp <- x_tmptmp/norms_tmptmp 
           
-          Dmat_tmp <- crossprod(x_tmp)
-          dvec_tmp <- crossprod(x_tmp, d_tmp[,j])
+          Dmat_tmp <- crossprod(x_tmptmp)
+          dvec_tmp <- crossprod(x_tmptmp, d_tmp[,j]) %>% .[,1]
         }
-        
-        rslt <- quadprog::solve.QP(Dmat_tmp, 
+        rslt <- quadprog::solve.QP(Dmat_tmp,
                                    dvec_tmp,
-                                   rbind(Aeq, A, diag(length(lb)), diag_ub),  
+                                   rbind(Aeq, A, diag(length(lb)), diag_ub),
                                    c(beq, b, lb*norms_tmptmp, ub),
                                    meq = 0)$solution
-        rslt / norms_tmptmp
-      })
+         rslt / norms_tmptmp
+      }
+        )
       # res <- pbmclapply(ignore.interactive = T, 1:m,mc.cores = cores, function(j) {
       #   if (!conds){
       #     dvec_tmp <- dvec_tmp[,j]
@@ -363,7 +363,7 @@ tca.fit_means_vars <- function(X, W, mus_hat, sigmas_hat, tau_hat, C2, deltas_ha
       
       
       ## (2.1) Update estimates --------------------
-      
+      browser()
       tmp_res <- res %>% unlist %>% matrix(., nrow = k+1) %>% t 
       sigmas_hat <- sqrt(tmp_res[,1:k]) 
       tau_hat <- sqrt(mean(tmp_res[,k+1]))
@@ -631,4 +631,79 @@ tca_pbmc <- function(X, W, C1 = NULL, C1.map = NULL, C2 = NULL, refit_W = FALSE,
   gammas_hat_pvals.joint <- mdl[["gammas_hat_pvals.joint"]]
   flog.info("Finished tca.")
   return (list("W" = W, "mus_hat" = mus_hat, "sigmas_hat" = sigmas_hat, "tau_hat" = tau_hat, "deltas_hat" = deltas_hat, "gammas_hat" = gammas_hat, "deltas_hat_pvals" = deltas_hat_pvals, "gammas_hat_pvals" = gammas_hat_pvals, "gammas_hat_pvals.joint" = gammas_hat_pvals.joint, "C1" = C1, "C2" = C2) )
+}
+
+lsqlincon_opt <- function (C, d, A = NULL, b = NULL, Aeq = NULL, beq = NULL, lb = NULL, 
+                           ub = NULL) 
+{
+  if (!requireNamespace("quadprog", quietly = TRUE)) {
+    stop("quadprog needed for this function to work. Please install it.", 
+         call. = FALSE)
+  }
+  stopifnot(is.numeric(C), is.numeric(d))
+  if (is.null(A) && !is.null(b) || !is.null(A) && is.null(b)) 
+    stop("If any, both 'A' and 'b' must be NULL.")
+  if (is.null(Aeq) && !is.null(beq) || !is.null(Aeq) && is.null(beq)) 
+    stop("If any, both 'Aeq' and 'beq' must be NULL.")
+  if (!is.matrix(C)) 
+    C <- matrix(C, 1)
+  mc <- nrow(C)
+  nc <- ncol(C)
+  n <- nc
+  if (length(d) != mc) 
+    stop("Dimensions of 'C' and 'd' do not fit.")
+  if (is.null(A) && is.null(Aeq) && is.null(lb) && is.null(ub)) 
+    return(qr.solve(C, d))
+  if (!is.null(A)) {
+    if (!is.matrix(A)) 
+      A <- matrix(A, 1)
+    ma <- nrow(A)
+    na <- ncol(A)
+    if (na != n) 
+      stop("Number of columns of 'A' does not fit with 'C'.")
+    A <- -A
+    b <- -b
+  }
+  if (is.null(Aeq)) {
+    meq <- 0
+  }
+  else {
+    if (!is.matrix(Aeq)) 
+      Aeq <- matrix(Aeq, 1)
+    meq <- nrow(Aeq)
+    neq <- ncol(Aeq)
+    if (neq != n) 
+      stop("Number of columns of 'Aeq' does not fit with 'C'.")
+  }
+  if (is.null(lb)) {
+    diag_lb <- NULL
+  }
+  else {
+    if (length(lb) == 1) {
+      lb <- rep(lb, n)
+    }
+    else if (length(lb) != n) {
+      stop("Length of 'lb' and dimensions of C do not fit.")
+    }
+    diag_lb <- diag(n)
+  }
+  if (is.null(ub)) {
+    diag_ub <- NULL
+  }
+  else {
+    if (length(ub) == 1) {
+      ub <- rep(ub, n)
+    }
+    else if (length(ub) != n) {
+      stop("Length of 'ub' and dimensions of C do not fit.")
+    }
+    diag_ub <- -diag(n)
+    ub <- -ub
+  }
+  Dmat <- AtA(C) # t(C) %*% C
+  dvec <- outerprodMV_p(C, d) # t(C) %*% d
+  Amat <- rbind(Aeq, A, diag_lb, diag_ub)
+  bvec <- c(beq, b, lb, ub)
+  rslt <- quadprog::solve.QP(Dmat, dvec, t(Amat), bvec, meq = meq)
+  rslt$solution
 }

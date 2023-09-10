@@ -2,6 +2,10 @@
 #include <Rcpp.h>
 #include <RcppEigen.h>
 #include <string>
+#include <omp.h>
+// [[Rcpp::plugins(openmp)]]
+#define THREAD_NUM 16
+
 
 using namespace std;
 using namespace Rcpp;
@@ -46,6 +50,12 @@ SEXP eigenW_norms(MatrixXd W, MatrixXd sigmas_hat, double tau_hat, int n_cores){
   MatrixXd D = (C.array()  + pow(tau_hat,2)).matrix();
   return wrap(D.cwiseSqrt());
 }
+// [[Rcpp::export]]
+SEXP eigenW_norms_tmp(MatrixXd W, MatrixXd sigmas_hat, double tau_hat, int n_cores){
+  MatrixXd C = ((W * sigmas_hat).array() + pow(tau_hat,2)).cwiseSqrt();
+  // MatrixXd D = (C.array()  + pow(tau_hat,2)).matrix();
+  return wrap(C);
+}
 
 // [[Rcpp::export]]
 SEXP eigenArrayProduct(ArrayXXd A, ArrayXXd B){
@@ -78,4 +88,24 @@ SEXP AtA(const MapMatd& A){
   MatrixXd AtA = MatrixXd(m,m).setZero().selfadjointView<Lower>()
                               .rankUpdate(A.adjoint());
   return wrap(AtA);
+}
+
+// [[Rcpp::export]]
+SEXP sumlog_p(MatrixXd& A){
+  int m = A.cols();
+  VectorXd res(m);
+#pragma omp parallel for 
+  for(int i = 0; i < m; i++){
+    res(i) = A.col(i).array().log().sum();
+  }
+  return wrap(res.sum());
+}
+
+
+//[[Rcpp::export]]
+NumericVector colNorm(MatrixXd& A){
+  VectorXd B;
+  B = A.colwise().lpNorm<2>();
+  return wrap(B);
+  // return wrap(A.colwise().lpNorm<2>().array());
 }
