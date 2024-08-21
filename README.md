@@ -8,7 +8,7 @@
 ## Installation
 You can easily install the latest version of TCA-optimized directly from GitHub using the following devtools command in R:
 
-r
+
 ```
 devtools::install_github("yourusername/TCA-optimized")
 # Make sure you have the devtools package installed:
